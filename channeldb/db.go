@@ -39,6 +39,11 @@ var (
 			number:    0,
 			migration: nil,
 		},
+		{
+			// The base DB version requires no migration.
+			number:    1,
+			migration: ShortChanIDMigration,
+		},
 	}
 
 	// Big endian is the preferred byte order, due to cursor scans over
