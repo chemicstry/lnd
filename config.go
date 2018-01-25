@@ -351,6 +351,10 @@ func loadConfig() (*config, error) {
 			numNets++
 			activeNetParams = bitcoinSimNetParams
 		}
+		if numNets == 0 {
+			numNets++
+			activeNetParams = bitcoinMainNetParams
+		}
 		if numNets > 1 {
 			str := "%s: The testnet, segnet, and simnet params can't be " +
 				"used together -- choose one of the three"
