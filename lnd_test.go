@@ -86,7 +86,7 @@ func (h *harnessTest) RunTestCase(testCase *testCase,
 	defer func() {
 		if err := recover(); err != nil {
 			description := errors.Wrap(err, 2).ErrorStack()
-			h.t.Fatalf("Failed: (%v) paniced with: \n%v",
+			h.t.Fatalf("Failed: (%v) panicked with: \n%v",
 				h.testCase.name, description)
 		}
 	}()
@@ -165,7 +165,11 @@ func openChannelAndAssert(ctx context.Context, t *harnessTest,
 	if err != nil {
 		t.Fatalf("error while waiting for channel open: %v", err)
 	}
-	fundingTxID, err := chainhash.NewHash(fundingChanPoint.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(fundingChanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	fundingTxID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -188,7 +192,7 @@ func openChannelAndAssert(ctx context.Context, t *harnessTest,
 }
 
 // closeChannelAndAssert attempts to close a channel identified by the passed
-// channel point owned by the passed lighting node. A fully blocking channel
+// channel point owned by the passed Lightning node. A fully blocking channel
 // closure is attempted, therefore the passed context should be a child derived
 // via timeout from a base parent. Additionally, once the channel has been
 // detected as closed, an assertion checks that the transaction is found within
@@ -202,7 +206,11 @@ func closeChannelAndAssert(ctx context.Context, t *harnessTest,
 		t.Fatalf("unable to close channel: %v", err)
 	}
 
-	txid, err := chainhash.NewHash(fundingChanPoint.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(fundingChanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	txid, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to convert to chainhash: %v", err)
 	}
@@ -548,7 +556,11 @@ func testUpdateChannelPolicy(net *lntest.NetworkHarness, t *harnessTest) {
 	// txStr returns the string representation of the channel's
 	// funding tx.
 	txStr := func(chanPoint *lnrpc.ChannelPoint) string {
-		fundingTxID, err := chainhash.NewHash(chanPoint.FundingTxid)
+		txidHash, err := getChanPointFundingTxid(chanPoint)
+		if err != nil {
+			return ""
+		}
+		fundingTxID, err := chainhash.NewHash(txidHash)
 		if err != nil {
 			return ""
 		}
@@ -852,7 +864,9 @@ func testOpenChannelAfterReorg(net *lntest.NetworkHarness, t *harnessTest) {
 	}
 
 	chanPoint := &lnrpc.ChannelPoint{
-		FundingTxid: pendingUpdate.Txid,
+		FundingTxid: &lnrpc.ChannelPoint_FundingTxidBytes{
+			FundingTxidBytes: pendingUpdate.Txid,
+		},
 		OutputIndex: pendingUpdate.OutputIndex,
 	}
 
@@ -1015,7 +1029,9 @@ func testDisconnectingTargetPeer(net *lntest.NetworkHarness, t *harnessTest) {
 	// block until the channel is closed and will additionally assert the
 	// relevant channel closing post conditions.
 	chanPoint := &lnrpc.ChannelPoint{
-		FundingTxid: pendingUpdate.Txid,
+		FundingTxid: &lnrpc.ChannelPoint_FundingTxidBytes{
+			FundingTxidBytes: pendingUpdate.Txid,
+		},
 		OutputIndex: pendingUpdate.OutputIndex,
 	}
 
@@ -1196,7 +1212,9 @@ peersPoll:
 	// block until the channel is closed and will additionally assert the
 	// relevant channel closing post conditions.
 	chanPoint := &lnrpc.ChannelPoint{
-		FundingTxid: pendingUpdate.Txid,
+		FundingTxid: &lnrpc.ChannelPoint_FundingTxidBytes{
+			FundingTxidBytes: pendingUpdate.Txid,
+		},
 		OutputIndex: pendingUpdate.OutputIndex,
 	}
 	ctxt, _ = context.WithTimeout(ctxb, timeout)
@@ -1328,7 +1346,7 @@ func assertNumForceClosedChannels(t *harnessTest,
 }
 
 // assertPendingHtlcStageAndMaturity uniformly tests all pending htlc's
-// belonging to a force closed channel, testing for the expeced stage number,
+// belonging to a force closed channel, testing for the expected stage number,
 // blocks till maturity, and the maturity height.
 func assertPendingHtlcStageAndMaturity(t *harnessTest,
 	forceClose *lnrpc.PendingChannelsResponse_ForceClosedChannel,
@@ -1516,7 +1534,14 @@ func testChannelForceClosure(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Compute the outpoint of the channel, which we will use repeatedly to
 	// locate the pending channel information in the rpc responses.
-	txid, _ := chainhash.NewHash(chanPoint.FundingTxid[:])
+	txidHash, err := getChanPointFundingTxid(chanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	txid, err := chainhash.NewHash(txidHash)
+	if err != nil {
+		t.Fatalf("unable to create sha hash: %v", err)
+	}
 	op := wire.OutPoint{
 		Hash:  *txid,
 		Index: chanPoint.OutputIndex,
@@ -2298,7 +2323,11 @@ func testMultiHopPayments(net *lntest.NetworkHarness, t *harnessTest) {
 		net.Bob, chanAmt, 0)
 	networkChans = append(networkChans, chanPointAlice)
 
-	aliceChanTXID, err := chainhash.NewHash(chanPointAlice.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(chanPointAlice)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	aliceChanTXID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2329,7 +2358,11 @@ func testMultiHopPayments(net *lntest.NetworkHarness, t *harnessTest) {
 	chanPointDave := openChannelAndAssert(ctxt, t, net, dave,
 		net.Alice, chanAmt, 0)
 	networkChans = append(networkChans, chanPointDave)
-	daveChanTXID, err := chainhash.NewHash(chanPointDave.FundingTxid)
+	txidHash, err = getChanPointFundingTxid(chanPointDave)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	daveChanTXID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2356,7 +2389,11 @@ func testMultiHopPayments(net *lntest.NetworkHarness, t *harnessTest) {
 		dave, chanAmt, 0)
 	networkChans = append(networkChans, chanPointCarol)
 
-	carolChanTXID, err := chainhash.NewHash(chanPointCarol.FundingTxid)
+	txidHash, err = getChanPointFundingTxid(chanPointCarol)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	carolChanTXID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2366,12 +2403,29 @@ func testMultiHopPayments(net *lntest.NetworkHarness, t *harnessTest) {
 	}
 
 	// Wait for all nodes to have seen all channels.
+	nodes := []*lntest.HarnessNode{net.Alice, net.Bob, carol, dave}
+	nodeNames := []string{"Alice", "Bob", "Carol", "Dave"}
 	for _, chanPoint := range networkChans {
-		for _, node := range []*lntest.HarnessNode{net.Alice, net.Bob, carol, dave} {
+		for i, node := range nodes {
+			txidHash, err := getChanPointFundingTxid(chanPoint)
+			if err != nil {
+				t.Fatalf("unable to get txid: %v", err)
+			}
+			txid, e := chainhash.NewHash(txidHash)
+			if e != nil {
+				t.Fatalf("unable to create sha hash: %v", e)
+			}
+			point := wire.OutPoint{
+				Hash:  *txid,
+				Index: chanPoint.OutputIndex,
+			}
+
 			ctxt, _ = context.WithTimeout(ctxb, timeout)
 			err = node.WaitForNetworkChannelOpen(ctxt, chanPoint)
 			if err != nil {
-				t.Fatalf("timeout waiting for channel open: %v", err)
+				t.Fatalf("%s(%d): timeout waiting for "+
+					"channel(%s) open: %v", nodeNames[i],
+					node.NodeID, point, err)
 			}
 		}
 	}
@@ -2487,7 +2541,11 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 		net.Bob, chanAmt*2, 0)
 	networkChans = append(networkChans, chanPointAlice)
 
-	aliceChanTXID, err := chainhash.NewHash(chanPointAlice.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(chanPointAlice)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	aliceChanTXID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2512,7 +2570,11 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	chanPointDave := openChannelAndAssert(ctxt, t, net, dave,
 		net.Alice, chanAmt, 0)
 	networkChans = append(networkChans, chanPointDave)
-	daveChanTXID, err := chainhash.NewHash(chanPointDave.FundingTxid)
+	txidHash, err = getChanPointFundingTxid(chanPointDave)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	daveChanTXID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2539,7 +2601,11 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 		dave, chanAmt, 0)
 	networkChans = append(networkChans, chanPointCarol)
 
-	carolChanTXID, err := chainhash.NewHash(chanPointCarol.FundingTxid)
+	txidHash, err = getChanPointFundingTxid(chanPointCarol)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	carolChanTXID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2551,17 +2617,31 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	// Wait for all nodes to have seen all these channels, as they
 	// are all public.
 	nodes := []*lntest.HarnessNode{net.Alice, net.Bob, carol, dave}
+	nodeNames := []string{"Alice", "Bob", "Carol", "Dave"}
 	for _, chanPoint := range networkChans {
-		for _, node := range nodes {
+		for i, node := range nodes {
+			txidHash, err := getChanPointFundingTxid(chanPoint)
+			if err != nil {
+				t.Fatalf("unable to get txid: %v", err)
+			}
+			txid, e := chainhash.NewHash(txidHash)
+			if e != nil {
+				t.Fatalf("unable to create sha hash: %v", e)
+			}
+			point := wire.OutPoint{
+				Hash:  *txid,
+				Index: chanPoint.OutputIndex,
+			}
+
 			ctxt, _ = context.WithTimeout(ctxb, timeout)
 			err = node.WaitForNetworkChannelOpen(ctxt, chanPoint)
 			if err != nil {
-				t.Fatalf("timeout waiting for channel open: %v",
-					err)
+				t.Fatalf("%s(%d): timeout waiting for "+
+					"channel(%s) open: %v", nodeNames[i],
+					node.NodeID, point, err)
 			}
 		}
 	}
-
 	// Now create a _private_ channel directly between Carol and
 	// Alice of 100k.
 	if err := net.ConnectNodes(ctxb, carol, net.Alice); err != nil {
@@ -2580,7 +2660,11 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	if err != nil {
 		t.Fatalf("error while waiting for channel open: %v", err)
 	}
-	fundingTxID, err := chainhash.NewHash(chanPointPrivate.FundingTxid)
+	txidHash, err = getChanPointFundingTxid(chanPointPrivate)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	fundingTxID, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -2699,7 +2783,7 @@ func testPrivateChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	// Finally, we make sure Dave and Bob does not know about the
 	// private channel between Carol and Alice. We first mine
 	// plenty of blocks, such that the channel would have been
-	// announceed in case it was public.
+	// announced in case it was public.
 	mineBlocks(t, net, 10)
 
 	// We create a helper method to check how many edges each of the
@@ -2806,7 +2890,7 @@ func testInvoiceSubscriptions(net *lntest.NetworkHarness, t *harnessTest) {
 		// The invoice update should exactly match the invoice created
 		// above, but should now be settled and have SettleDate
 		if !invoiceUpdate.Settled {
-			t.Fatalf("invoice not settled but shoudl be")
+			t.Fatalf("invoice not settled but should be")
 		}
 		if invoiceUpdate.SettleDate == 0 {
 			t.Fatalf("invoice should have non zero settle date, but doesn't")
@@ -2945,7 +3029,7 @@ func testMaxPendingChannels(net *lntest.NetworkHarness, t *harnessTest) {
 	// Mine 6 blocks, then wait for node's to notify us that the channel has
 	// been opened. The funding transactions should be found within the
 	// first newly mined block. 6 blocks make sure the funding transaction
-	// has enouught confirmations to be announced publicly.
+	// has enough confirmations to be announced publicly.
 	block := mineBlocks(t, net, 6)[0]
 
 	chanPoints := make([]*lnrpc.ChannelPoint, maxPendingChannels)
@@ -2956,7 +3040,11 @@ func testMaxPendingChannels(net *lntest.NetworkHarness, t *harnessTest) {
 			t.Fatalf("error while waiting for channel open: %v", err)
 		}
 
-		fundingTxID, err := chainhash.NewHash(fundingChanPoint.FundingTxid)
+		txidHash, err := getChanPointFundingTxid(fundingChanPoint)
+		if err != nil {
+			t.Fatalf("unable to get txid: %v", err)
+		}
+		fundingTxID, err := chainhash.NewHash(txidHash)
 		if err != nil {
 			t.Fatalf("unable to create sha hash: %v", err)
 		}
@@ -3078,7 +3166,7 @@ func waitForNTxsInMempool(miner *rpcclient.Client, n int,
 	}
 }
 
-// testRevokedCloseRetributinPostBreachConf tests that Alice is able carry out
+// testRevokedCloseRetribution tests that Alice is able carry out
 // retribution in the event that she fails immediately after detecting Bob's
 // breach txn in the mempool.
 func testRevokedCloseRetribution(net *lntest.NetworkHarness, t *harnessTest) {
@@ -3150,14 +3238,23 @@ func testRevokedCloseRetribution(net *lntest.NetworkHarness, t *harnessTest) {
 
 	// Next query for Bob's channel state, as we sent 3 payments of 10k
 	// satoshis each, Bob should now see his balance as being 30k satoshis.
-	time.Sleep(time.Millisecond * 200)
-	bobChan, err := getBobChanInfo()
+	var bobChan *lnrpc.ActiveChannel
+	var predErr error
+	err = lntest.WaitPredicate(func() bool {
+		bobChan, err = getBobChanInfo()
+		if err != nil {
+			t.Fatalf("unable to get bob's channel info: %v", err)
+		}
+		if bobChan.LocalBalance != 30000 {
+			predErr = fmt.Errorf("bob's balance is incorrect, "+
+				"got %v, expected %v", bobChan.LocalBalance,
+				30000)
+			return false
+		}
+		return true
+	}, time.Second*15)
 	if err != nil {
-		t.Fatalf("unable to get bob's channel info: %v", err)
-	}
-	if bobChan.LocalBalance != 30000 {
-		t.Fatalf("bob's balance is incorrect, got %v, expected %v",
-			bobChan.LocalBalance, 30000)
+		t.Fatalf("%v", predErr)
 	}
 
 	// Grab Bob's current commitment height (update number), we'll later
@@ -3603,7 +3700,7 @@ func testRevokedCloseRetributionRemoteHodl(net *lntest.NetworkHarness,
 	// We'll introduce another closure to validate that Carol's current
 	// number of updates is at least as large as the provided minimum
 	// number.
-	checkCarolNumUpdatesAtleast := func(minimum uint64) {
+	checkCarolNumUpdatesAtLeast := func(minimum uint64) {
 		carolChan, err := getCarolChanInfo()
 		if err != nil {
 			t.Fatalf("unable to get carol's channel info: %v", err)
@@ -3651,7 +3748,7 @@ func testRevokedCloseRetributionRemoteHodl(net *lntest.NetworkHarness,
 	checkCarolBalance(pushAmt)
 	// Since Carol has not settled, she should only see at least one update
 	// to her channel.
-	checkCarolNumUpdatesAtleast(1)
+	checkCarolNumUpdatesAtLeast(1)
 
 	// Create a temporary file to house Carol's database state at this
 	// particular point in history.
@@ -3681,7 +3778,7 @@ func testRevokedCloseRetributionRemoteHodl(net *lntest.NetworkHarness,
 	// pushed to her, and that at least one more update has occurred.
 	time.Sleep(500 * time.Millisecond)
 	checkCarolBalance(pushAmt)
-	checkCarolNumUpdatesAtleast(carolStateNumPreCopy + 1)
+	checkCarolNumUpdatesAtLeast(carolStateNumPreCopy + 1)
 
 	// Now we shutdown Carol, copying over the her temporary database state
 	// which has the *prior* channel state over her current most up to date
@@ -3698,7 +3795,7 @@ func testRevokedCloseRetributionRemoteHodl(net *lntest.NetworkHarness,
 	// Ensure that Carol's view of the channel is consistent with the
 	// state of the channel just before it was snapshotted.
 	checkCarolBalance(pushAmt)
-	checkCarolNumUpdatesAtleast(1)
+	checkCarolNumUpdatesAtLeast(1)
 
 	// Now query for Carol's channel state, it should show that she's at a
 	// state number in the past, *not* the latest state.
@@ -3948,7 +4045,7 @@ out:
 		t.Fatalf("unable to send payment: %v", err)
 	}
 
-	// The payment should've resulted in an error since we sent it with the
+	// The payment should have resulted in an error since we sent it with the
 	// wrong payment hash.
 	if resp.PaymentError == "" {
 		t.Fatalf("payment should have been rejected due to invalid " +
@@ -4125,7 +4222,7 @@ func subscribeGraphNotifications(t *harnessTest, ctxb context.Context,
 		t.Fatalf("unable to create topology client: %v", err)
 	}
 
-	// We'll launch a goroutine that'll be responsible for proxying all
+	// We'll launch a goroutine that will be responsible for proxying all
 	// notifications recv'd from the client into the channel below.
 	quit := make(chan struct{})
 	graphUpdates := make(chan *lnrpc.GraphTopologyUpdate, 20)
@@ -4173,7 +4270,7 @@ func testGraphTopologyNotifications(net *lntest.NetworkHarness, t *harnessTest) 
 	chanPoint := openChannelAndAssert(ctxt, t, net, net.Alice, net.Bob,
 		chanAmt, 0)
 
-	// The channel opening above should've triggered a few notifications
+	// The channel opening above should have triggered a few notifications
 	// sent to the notification client. We'll expect two channel updates,
 	// and two node announcements.
 	const numExpectedUpdates = 4
@@ -4245,11 +4342,17 @@ func testGraphTopologyNotifications(net *lntest.NetworkHarness, t *harnessTest) 
 			t.Fatalf("close heights of channel mismatch: expected "+
 				"%v, got %v", blockHeight+1, closedChan.ClosedHeight)
 		}
-		if !bytes.Equal(closedChan.ChanPoint.FundingTxid,
-			chanPoint.FundingTxid) {
+		chanPointTxid, err := getChanPointFundingTxid(chanPoint)
+		if err != nil {
+			t.Fatalf("unable to get txid: %v", err)
+		}
+		closedChanTxid, err := getChanPointFundingTxid(closedChan.ChanPoint)
+		if err != nil {
+			t.Fatalf("unable to get txid: %v", err)
+		}
+		if !bytes.Equal(closedChanTxid, chanPointTxid) {
 			t.Fatalf("channel point hash mismatch: expected %v, "+
-				"got %v", chanPoint.FundingTxid,
-				closedChan.ChanPoint.FundingTxid)
+				"got %v", chanPointTxid, closedChanTxid)
 		}
 		if closedChan.ChanPoint.OutputIndex != chanPoint.OutputIndex {
 			t.Fatalf("output index mismatch: expected %v, got %v",
@@ -5148,7 +5251,11 @@ func testMultiHopHtlcLocalTimeout(net *lntest.NetworkHarness, t *harnessTest) {
 	}
 
 	// Bob's force close transaction should now be found in the mempool.
-	bobFundingTxid, err := chainhash.NewHash(bobChanPoint.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(bobChanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	bobFundingTxid, err := chainhash.NewHash(txidHash)
 	if err != nil {
 		t.Fatalf("unable to create sha hash: %v", err)
 	}
@@ -5361,7 +5468,11 @@ func testMultiHopReceiverChainClaim(net *lntest.NetworkHarness, t *harnessTest) 
 	if err != nil {
 		t.Fatalf("transactions not found in mempool: %v", err)
 	}
-	bobFundingTxid, err := chainhash.NewHash(bobChanPoint.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(bobChanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	bobFundingTxid, err := chainhash.NewHash(txidHash)
 	carolFundingPoint := wire.OutPoint{
 		Hash:  *bobFundingTxid,
 		Index: bobChanPoint.OutputIndex,
@@ -5976,7 +6087,14 @@ func testMultiHopHtlcLocalChainClaim(net *lntest.NetworkHarness, t *harnessTest)
 	if err != nil {
 		t.Fatalf("transactions not found in mempool: %v", err)
 	}
-	bobFundingTxid, err := chainhash.NewHash(bobChanPoint.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(bobChanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	bobFundingTxid, err := chainhash.NewHash(txidHash)
+	if err != nil {
+		t.Fatalf("unable to create sha hash: %v", err)
+	}
 	carolFundingPoint := wire.OutPoint{
 		Hash:  *bobFundingTxid,
 		Index: bobChanPoint.OutputIndex,
@@ -6186,7 +6304,14 @@ func testMultiHopHtlcRemoteChainClaim(net *lntest.NetworkHarness, t *harnessTest
 	if err != nil {
 		t.Fatalf("transactions not found in mempool: %v", err)
 	}
-	bobFundingTxid, err := chainhash.NewHash(bobChanPoint.FundingTxid)
+	txidHash, err := getChanPointFundingTxid(bobChanPoint)
+	if err != nil {
+		t.Fatalf("unable to get txid: %v", err)
+	}
+	bobFundingTxid, err := chainhash.NewHash(txidHash)
+	if err != nil {
+		t.Fatalf("unable to create sha hash: %v", err)
+	}
 	carolFundingPoint := wire.OutPoint{
 		Hash:  *bobFundingTxid,
 		Index: bobChanPoint.OutputIndex,

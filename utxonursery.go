@@ -302,7 +302,7 @@ func (u *utxoNursery) Start() error {
 	// NOTE: The next two steps *may* spawn go routines, thus from this
 	// point forward, we must close the nursery's quit channel if we detect
 	// any failures during startup to ensure they terminate.
-	if err := u.reloadPreschool(lastGraduatedHeight); err != nil {
+	if err := u.reloadPreschool(); err != nil {
 		newBlockChan.Cancel()
 		close(u.quit)
 		return err
@@ -374,7 +374,7 @@ func (u *utxoNursery) IncubateOutputs(chanPoint wire.OutPoint,
 			0,
 		)
 
-		// We'll skip any zero value'd outputs as this indicates we
+		// We'll skip any zero valued outputs as this indicates we
 		// don't have a settled balance within the commitment
 		// transaction.
 		if selfOutput.Amount() > 0 {
@@ -608,14 +608,39 @@ func (u *utxoNursery) NurseryReport(
 
 // reloadPreschool re-initializes the chain notifier with all of the outputs
 // that had been saved to the "preschool" database bucket prior to shutdown.
-func (u *utxoNursery) reloadPreschool(heightHint uint32) error {
+func (u *utxoNursery) reloadPreschool() error {
 	psclOutputs, err := u.cfg.Store.FetchPreschools()
 	if err != nil {
 		return err
 	}
 
+	// For each of the preschool outputs stored in the nursery store, load
+	// its close summary from disk so that we can get an accurate height
+	// hint from which to start our range for spend notifications.
 	for i := range psclOutputs {
-		err := u.registerPreschoolConf(&psclOutputs[i], heightHint)
+		kid := &psclOutputs[i]
+		chanPoint := kid.OriginChanPoint()
+
+		// Load the close summary for this output's channel point.
+		closeSummary, err := u.cfg.DB.FetchClosedChannel(chanPoint)
+		if err == channeldb.ErrClosedChannelNotFound {
+			// This should never happen since the close summary
+			// should only be removed after the channel has been
+			// swept completely.
+			utxnLog.Warnf("Close summary not found for "+
+				"chan_point=%v, can't determine height hint"+
+				"to sweep commit txn", chanPoint)
+			continue
+
+		} else if err != nil {
+			return err
+		}
+
+		// Use the close height from the channel summary as our height
+		// hint to drive our spend notifications, with our confirmation
+		// depth as a buffer for reorgs.
+		heightHint := closeSummary.CloseHeight - u.cfg.ConfDepth
+		err = u.registerPreschoolConf(kid, heightHint)
 		if err != nil {
 			return err
 		}
@@ -1164,7 +1189,7 @@ func (u *utxoNursery) waitForSweepConf(classHeight uint32,
 
 	// Mark the confirmed kindergarten outputs as graduated.
 	if err := u.cfg.Store.GraduateKinder(classHeight); err != nil {
-		utxnLog.Errorf("Unable to graduate %v kingdergarten outputs: "+
+		utxnLog.Errorf("Unable to graduate %v kindergarten outputs: "+
 			"%v", len(kgtnOutputs), err)
 		return
 	}
@@ -1418,8 +1443,8 @@ type htlcMaturityReport struct {
 
 	// stage indicates whether the htlc is in the CLTV-timeout stage (1) or
 	// the CSV-delay stage (2). A stage 1 htlc's maturity height will be set
-	// to it's expiry height, while a stage 2 htlc's maturity height will be
-	// set to it's confirmation height plus the maturity requirement.
+	// to its expiry height, while a stage 2 htlc's maturity height will be
+	// set to its confirmation height plus the maturity requirement.
 	stage uint32
 }
 
@@ -1915,7 +1940,7 @@ func readTxOut(r io.Reader, txo *wire.TxOut) error {
 	return nil
 }
 
-// Compile-time constraint to ensure kidOutput and babyOutpt implement the
+// Compile-time constraint to ensure kidOutput and babyOutput implement the
 // CsvSpendableOutput interface.
 var _ CsvSpendableOutput = (*kidOutput)(nil)
 var _ CsvSpendableOutput = (*babyOutput)(nil)

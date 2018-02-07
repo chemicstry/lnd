@@ -145,7 +145,7 @@
         ]
       }
     },
-    "/v1/channels/{channel_point.funding_txid}/{channel_point.output_index}": {
+    "/v1/channels/{channel_point.funding_txid_str}/{channel_point.output_index}": {
       "delete": {
         "summary": "* lncli: `closechannel`\nCloseChannel attempts to close an active channel identified by its channel\noutpoint (ChannelPoint). The actions of this method can additionally be\naugmented to attempt a force close after a timeout period in the case of an\ninactive peer. If a non-force close (cooperative closure) is requested,\nthen the user can specify either a target number of blocks until the\nclosure transaction is confirmed, or a manual fee rate. If neither are\nspecified, then a default lax, block confirmation target is used.",
         "operationId": "CloseChannel",
@@ -159,11 +159,10 @@
         },
         "parameters": [
           {
-            "name": "channel_point.funding_txid",
+            "name": "channel_point.funding_txid_str",
             "in": "path",
             "required": true,
-            "type": "string",
-            "format": "byte"
+            "type": "string"
           },
           {
             "name": "channel_point.output_index",
@@ -171,6 +170,33 @@
             "required": true,
             "type": "integer",
             "format": "int64"
+          }
+        ],
+        "tags": [
+          "Lightning"
+        ]
+      }
+    },
+    "/v1/chanpolicy": {
+      "post": {
+        "summary": "* lncli: `updatechanpolicy`\nUpdateChannelPolicy allows the caller to update the fee schedule and\nchannel policies for all channels globally, or a particular channel.",
+        "operationId": "UpdateChannelPolicy",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/lnrpcPolicyUpdateResponse"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/lnrpcPolicyUpdateRequest"
+            }
           }
         ],
         "tags": [
@@ -220,36 +246,11 @@
         "tags": [
           "Lightning"
         ]
-      },
-      "post": {
-        "summary": "* lncli: `updatechanpolicy`\nUpdateChannelPolicy allows the caller to update the fee schedule and\nchannel policies for all channels globally, or a particular channel.",
-        "operationId": "UpdateChannelPolicy",
-        "responses": {
-          "200": {
-            "description": "",
-            "schema": {
-              "$ref": "#/definitions/lnrpcPolicyUpdateResponse"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/lnrpcPolicyUpdateRequest"
-            }
-          }
-        ],
-        "tags": [
-          "Lightning"
-        ]
       }
     },
     "/v1/getinfo": {
       "get": {
-        "summary": "* lncli: `getinfo`\nGetInfo returns general information concerning the lightning node including\nit's identity pubkey, alias, the chains it is connected to, and information\nconcerning the number of open+pending channels.",
+        "summary": "* lncli: `getinfo`\nGetInfo returns general information concerning the lightning node including\nits identity pubkey, alias, the chains it is connected to, and information\nconcerning the number of open+pending channels.",
         "operationId": "GetInfo",
         "responses": {
           "200": {
@@ -351,7 +352,7 @@
     },
     "/v1/graph/routes/{pub_key}/{amt}": {
       "get": {
-        "summary": "* lncli: `queryroutes`\nQueryRoutes attempts to query the daemon's Channel Router for a possible\nroute to a target destination capable of carrying a specific amount of\nsatoshis. The retuned route contains the full details required to craft and\nsend an HTLC, also including the necessary information that should be\npresent within the Sphinx packet encapsualted within the HTLC.",
+        "summary": "* lncli: `queryroutes`\nQueryRoutes attempts to query the daemon's Channel Router for a possible\nroute to a target destination capable of carrying a specific amount of\nsatoshis. The retuned route contains the full details required to craft and\nsend an HTLC, also including the necessary information that should be\npresent within the Sphinx packet encapsulated within the HTLC.",
         "operationId": "QueryRoutes",
         "responses": {
           "200": {
@@ -383,7 +384,7 @@
     },
     "/v1/invoice/{r_hash_str}": {
       "get": {
-        "summary": "* lncli: `lookupinvoice`\nLookupInvoice attemps to look up an invoice according to its payment hash.\nThe passed payment hash *must* be exactly 32 bytes, if not, an error is\nreturned.",
+        "summary": "* lncli: `lookupinvoice`\nLookupInvoice attempts to look up an invoice according to its payment hash.\nThe passed payment hash *must* be exactly 32 bytes, if not, an error is\nreturned.",
         "operationId": "LookupInvoice",
         "responses": {
           "200": {
@@ -1035,7 +1036,7 @@
     "lnrpcChannelPoint": {
       "type": "object",
       "properties": {
-        "funding_txid": {
+        "funding_txid_bytes": {
           "type": "string",
           "format": "byte",
           "title": "/ Txid of the funding transaction"
@@ -1562,7 +1563,7 @@
         },
         "node_pubkey_string": {
           "type": "string",
-          "title": "/ The hex encorded pubkey of the node to open a channel with"
+          "title": "/ The hex encoded pubkey of the node to open a channel with"
         },
         "local_funding_amount": {
           "type": "string",
@@ -1674,6 +1675,10 @@
           "type": "string",
           "format": "int64",
           "title": "/ The fee paid for this payment in satoshis"
+        },
+        "payment_preimage": {
+          "type": "string",
+          "title": "/ The payment preimage"
         }
       }
     },

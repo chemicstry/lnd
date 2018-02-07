@@ -192,7 +192,7 @@ alice$ lncli listchannels
 Send the payment from `Alice` to `Bob`.
 ```bash
 # Add invoice on "Bob" side:
-bob$ lncli addinvoice --value=10000
+bob$ lncli addinvoice --amt=10000
 {
         "r_hash": "<your_random_rhash_here>", 
         "pay_req": "<encoded_invoice>", 
@@ -280,7 +280,7 @@ bitcoins. The schema will be following:
                        + --------------- +        
         
         
- (1) You may connect an additinal node "Bob" and make the multihop
+ (1) You may connect an additional node "Bob" and make the multihop
  payment Alice->Faucet->Bob
   
  (2) "Faucet", "Alice" and "Bob" are the lightning network daemons which 

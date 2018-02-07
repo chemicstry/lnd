@@ -131,6 +131,8 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 
 	listeners := make([]net.Listener, len(listenAddrs))
 	for i, addr := range listenAddrs {
+		// Note: though brontide.NewListener uses ResolveTCPAddr, it doesn't need to call the
+		// general lndResolveTCP function since we are resolving a local address.
 		listeners[i], err = brontide.NewListener(privKey, addr)
 		if err != nil {
 			return nil, err
@@ -173,7 +175,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	s.witnessBeacon = &preimageBeacon{
 		invoices:    s.invoices,
 		wCache:      chanDB.NewWitnessCache(),
-		subscribers: make(map[uint64]*preimageSubcriber),
+		subscribers: make(map[uint64]*preimageSubscriber),
 	}
 
 	// If the debug HTLC flag is on, then we invoice a "master debug"
@@ -213,7 +215,9 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	})
 
 	// If external IP addresses have been specified, add those to the list
-	// of this server's addresses.
+	// of this server's addresses. We need to use the cfg.net.ResolveTCPAddr
+	// function in case we wish to resolve hosts over Tor since domains
+	// CAN be passed into the ExternalIPs configuration option.
 	selfAddrs := make([]net.Addr, 0, len(cfg.ExternalIPs))
 	for _, ip := range cfg.ExternalIPs {
 		var addr string
@@ -224,7 +228,7 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 			addr = ip
 		}
 
-		lnAddr, err := net.ResolveTCPAddr("tcp", addr)
+		lnAddr, err := cfg.net.ResolveTCPAddr("tcp", addr)
 		if err != nil {
 			return nil, err
 		}
@@ -254,11 +258,11 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 		HaveNodeAnnouncement: true,
 		LastUpdate:           time.Now(),
 		Addresses:            selfAddrs,
-		PubKey:               privKey.PubKey(),
 		Alias:                nodeAlias.String(),
 		Features:             s.globalFeatures,
 		Color:                color,
 	}
+	copy(selfNode.PubKeyBytes[:], privKey.PubKey().SerializeCompressed())
 
 	// If our information has changed since our last boot, then we'll
 	// re-sign our node announcement so a fresh authenticated version of it
@@ -268,31 +272,35 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 	nodeAnn := &lnwire.NodeAnnouncement{
 		Timestamp: uint32(selfNode.LastUpdate.Unix()),
 		Addresses: selfNode.Addresses,
-		NodeID:    selfNode.PubKey,
+		NodeID:    selfNode.PubKeyBytes,
 		Alias:     nodeAlias,
 		Features:  selfNode.Features.RawFeatureVector,
 		RGBColor:  color,
 	}
-	selfNode.AuthSig, err = discovery.SignAnnouncement(s.nodeSigner,
-		s.identityPriv.PubKey(), nodeAnn,
+	authSig, err := discovery.SignAnnouncement(
+		s.nodeSigner, s.identityPriv.PubKey(), nodeAnn,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to generate signature for "+
 			"self node announcement: %v", err)
 	}
 
+	selfNode.AuthSigBytes = authSig.Serialize()
+	s.currentNodeAnn = nodeAnn
+
 	if err := chanGraph.SetSourceNode(selfNode); err != nil {
 		return nil, fmt.Errorf("can't set self node: %v", err)
 	}
 
-	nodeAnn.Signature = selfNode.AuthSig
-	s.currentNodeAnn = nodeAnn
-
+	nodeAnn.Signature, err = lnwire.NewSigFromRawSignature(selfNode.AuthSigBytes)
+	if err != nil {
+		return nil, err
+	}
 	s.chanRouter, err = routing.New(routing.Config{
 		Graph:     chanGraph,
 		Chain:     cc.chainIO,
 		ChainView: cc.chainView,
-		SendToSwitch: func(firstHop *btcec.PublicKey,
+		SendToSwitch: func(firstHopPub [33]byte,
 			htlcAdd *lnwire.UpdateAddHTLC,
 			circuit *sphinx.Circuit) ([32]byte, error) {
 
@@ -302,9 +310,6 @@ func newServer(listenAddrs []string, chanDB *channeldb.DB, cc *chainControl,
 			errorDecryptor := &htlcswitch.SphinxErrorDecrypter{
 				OnionErrorDecrypter: sphinx.NewOnionErrorDecrypter(circuit),
 			}
-
-			var firstHopPub [33]byte
-			copy(firstHopPub[:], firstHop.SerializeCompressed())
 
 			return s.htlcSwitch.SendHTLC(firstHopPub, htlcAdd, errorDecryptor)
 		},
@@ -575,7 +580,7 @@ func (s *server) WaitForShutdown() {
 // based on the server, and currently active bootstrap mechanisms as defined
 // within the current configuration.
 func initNetworkBootstrappers(s *server) ([]discovery.NetworkPeerBootstrapper, error) {
-	srvrLog.Infof("Initializing peer network boostrappers!")
+	srvrLog.Infof("Initializing peer network bootstrappers!")
 
 	var bootStrappers []discovery.NetworkPeerBootstrapper
 
@@ -595,13 +600,15 @@ func initNetworkBootstrappers(s *server) ([]discovery.NetworkPeerBootstrapper, e
 		dnsSeeds, ok := chainDNSSeeds[*activeNetParams.GenesisHash]
 
 		// If we have a set of DNS seeds for this chain, then we'll add
-		// it as an additional boostrapping source.
+		// it as an additional bootstrapping source.
 		if ok {
-			srvrLog.Infof("Creating DNS peer boostrapper with "+
+			srvrLog.Infof("Creating DNS peer bootstrapper with "+
 				"seeds: %v", dnsSeeds)
 
 			dnsBootStrapper, err := discovery.NewDNSSeedBootstrapper(
 				dnsSeeds,
+				cfg.net.LookupHost,
+				cfg.net.LookupSRV,
 			)
 			if err != nil {
 				return nil, err
@@ -644,7 +651,7 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 	// below to sample how many of these connections succeeded.
 	for _, addr := range bootStrapAddrs {
 		go func(a *lnwire.NetAddress) {
-			conn, err := brontide.Dial(s.identityPriv, a)
+			conn, err := brontide.Dial(s.identityPriv, a, cfg.net.Dial)
 			if err != nil {
 				srvrLog.Errorf("unable to connect to %v: %v",
 					a, err)
@@ -664,7 +671,7 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 
 	// We'll start with a 15 second backoff, and double the time every time
 	// an epoch fails up to a ceiling.
-	const backOffCeliing = time.Minute * 5
+	const backOffCeiling = time.Minute * 5
 	backOff := time.Second * 15
 
 	// We'll create a new ticker to wake us up every 15 seconds so we can
@@ -706,8 +713,8 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 				sampleTicker.Stop()
 
 				backOff *= 2
-				if backOff > backOffCeliing {
-					backOff = backOffCeliing
+				if backOff > backOffCeiling {
+					backOff = backOffCeiling
 				}
 
 				srvrLog.Debugf("Backing off peer bootstrapper to "+
@@ -729,13 +736,13 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 			// With the number of peers we need calculated, we'll
 			// query the network bootstrappers to sample a set of
 			// random addrs for us.
-			s.mu.Lock()
+			s.mu.RLock()
 			ignoreList := make(map[autopilot.NodeID]struct{})
 			for _, peer := range s.peersByPub {
 				nID := autopilot.NewNodeID(peer.addr.IdentityKey)
 				ignoreList[nID] = struct{}{}
 			}
-			s.mu.Unlock()
+			s.mu.RUnlock()
 
 			peerAddrs, err := discovery.MultiSourceBootstrap(
 				ignoreList, numNeeded*2, bootStrappers...,
@@ -754,7 +761,8 @@ func (s *server) peerBootstrapper(numTargetPeers uint32,
 				go func(a *lnwire.NetAddress) {
 					// TODO(roasbeef): can do AS, subnet,
 					// country diversity, etc
-					conn, err := brontide.Dial(s.identityPriv, a)
+					conn, err := brontide.Dial(s.identityPriv,
+						a, cfg.net.Dial)
 					if err != nil {
 						srvrLog.Errorf("unable to connect "+
 							"to %v: %v", a, err)
@@ -799,16 +807,24 @@ func (s *server) genNodeAnnouncement(
 	}
 
 	s.currentNodeAnn.Timestamp = newStamp
-	s.currentNodeAnn.Signature, err = discovery.SignAnnouncement(
+	sig, err := discovery.SignAnnouncement(
 		s.nodeSigner, s.identityPriv.PubKey(), s.currentNodeAnn,
 	)
+	if err != nil {
+		return lnwire.NodeAnnouncement{}, err
+	}
 
-	return *s.currentNodeAnn, err
+	s.currentNodeAnn.Signature, err = lnwire.NewSigFromSignature(sig)
+	if err != nil {
+		return lnwire.NodeAnnouncement{}, err
+	}
+
+	return *s.currentNodeAnn, nil
 }
 
 type nodeAddresses struct {
 	pubKey    *btcec.PublicKey
-	addresses []*net.TCPAddr
+	addresses []net.Addr
 }
 
 // establishPersistentConnections attempts to establish persistent connections
@@ -831,9 +847,13 @@ func (s *server) establishPersistentConnections() error {
 	}
 	for _, node := range linkNodes {
 		for _, address := range node.Addresses {
-			if address.Port == 0 {
-				address.Port = defaultPeerPort
+			switch addr := address.(type) {
+			case *net.TCPAddr:
+				if addr.Port == 0 {
+					addr.Port = defaultPeerPort
+				}
 			}
+
 		}
 		pubStr := string(node.IdentityPub.SerializeCompressed())
 
@@ -859,20 +879,25 @@ func (s *server) establishPersistentConnections() error {
 		_ *channeldb.ChannelEdgeInfo,
 		policy, _ *channeldb.ChannelEdgePolicy) error {
 
-		pubStr := string(policy.Node.PubKey.SerializeCompressed())
+		pubStr := string(policy.Node.PubKeyBytes[:])
 
 		// Add addresses from channel graph/NodeAnnouncements to the
 		// list of addresses we'll connect to. If there are duplicates
 		// that have different ports specified, the port from the
 		// channel graph should supersede the port from the link node.
-		var addrs []*net.TCPAddr
+		var addrs []net.Addr
 		linkNodeAddrs, ok := nodeAddrsMap[pubStr]
 		if ok {
 			for _, lnAddress := range linkNodeAddrs.addresses {
+				lnAddrTCP, ok := lnAddress.(*net.TCPAddr)
+				if !ok {
+					continue
+				}
+
 				var addrMatched bool
 				for _, polAddress := range policy.Node.Addresses {
 					polTCPAddr, ok := polAddress.(*net.TCPAddr)
-					if ok && polTCPAddr.IP.Equal(lnAddress.IP) {
+					if ok && polTCPAddr.IP.Equal(lnAddrTCP.IP) {
 						addrMatched = true
 						addrs = append(addrs, polTCPAddr)
 					}
@@ -890,11 +915,15 @@ func (s *server) establishPersistentConnections() error {
 			}
 		}
 
-		nodeAddrsMap[pubStr] = &nodeAddresses{
-			pubKey:    policy.Node.PubKey,
+		n := &nodeAddresses{
 			addresses: addrs,
 		}
+		n.pubKey, err = policy.Node.PubKey()
+		if err != nil {
+			return err
+		}
 
+		nodeAddrsMap[pubStr] = n
 		return nil
 	})
 	if err != nil && err != channeldb.ErrGraphNoEdgesFound {
@@ -1273,7 +1302,7 @@ func (s *server) peerConnected(conn net.Conn, connReq *connmgr.ConnReq,
 	brontideConn := conn.(*brontide.Conn)
 	peerAddr := &lnwire.NetAddress{
 		IdentityKey: brontideConn.RemotePub(),
-		Address:     conn.RemoteAddr().(*net.TCPAddr),
+		Address:     conn.RemoteAddr(),
 		ChainNet:    activeNetParams.Net,
 	}
 
@@ -1504,7 +1533,7 @@ func (s *server) addPeer(p *peer) {
 	}
 
 	// Track the new peer in our indexes so we can quickly look it up either
-	// according to its public key, or it's peer ID.
+	// according to its public key, or its peer ID.
 	// TODO(roasbeef): pipe all requests through to the
 	// queryHandler/peerManager
 
@@ -1660,7 +1689,7 @@ func (s *server) ConnectToPeer(addr *lnwire.NetAddress, perm bool) error {
 	// connect to the target peer. If the we can't make the connection, or
 	// the crypto negotiation breaks down, then return an error to the
 	// caller.
-	conn, err := brontide.Dial(s.identityPriv, addr)
+	conn, err := brontide.Dial(s.identityPriv, addr, cfg.net.Dial)
 	if err != nil {
 		return err
 	}

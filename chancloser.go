@@ -10,7 +10,6 @@ import (
 	"github.com/lightningnetwork/lnd/htlcswitch"
 	"github.com/lightningnetwork/lnd/lnwallet"
 	"github.com/lightningnetwork/lnd/lnwire"
-	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcd/txscript"
 	"github.com/roasbeef/btcd/wire"
 	"github.com/roasbeef/btcutil"
@@ -83,7 +82,7 @@ type chanCloseCfg struct {
 	broadcastTx func(*wire.MsgTx) error
 
 	// quit is a channel that should be sent upon in the occasion the state
-	// machine shouldk cease all progress and shutdown.
+	// machine should cease all progress and shutdown.
 	quit chan struct{}
 }
 
@@ -247,7 +246,7 @@ func (c *channelCloser) ShutdownChan() (*lnwire.Shutdown, error) {
 
 // ClosingTx returns the fully signed, final closing transaction.
 //
-// NOTE: THis transaction is only available if the state machine is in the
+// NOTE: This transaction is only available if the state machine is in the
 // closeFinished state.
 func (c *channelCloser) ClosingTx() (*wire.MsgTx, error) {
 	// If the state machine hasn't finished closing the channel then we'll
@@ -410,12 +409,12 @@ func (c *channelCloser) ProcessCloseMsg(msg lnwire.Message) ([]lnwire.Message, b
 		// transaction!  We'll craft the final closing transaction so
 		// we can broadcast it to the network.
 		matchingSig := c.priorFeeOffers[remoteProposedFee].Signature
-		localSig := append(
-			matchingSig.Serialize(), byte(txscript.SigHashAll),
-		)
-		remoteSig := append(
-			closeSignedMsg.Signature.Serialize(), byte(txscript.SigHashAll),
-		)
+		localSigBytes := matchingSig.ToSignatureBytes()
+		localSig := append(localSigBytes, byte(txscript.SigHashAll))
+
+		remoteSigBytes := closeSignedMsg.Signature.ToSignatureBytes()
+		remoteSig := append(remoteSigBytes, byte(txscript.SigHashAll))
+
 		closeTx, finalLocalBalance, err := c.cfg.channel.CompleteCooperativeClose(
 			localSig, remoteSig, c.localDeliveryScript,
 			c.remoteDeliveryScript, remoteProposedFee,
@@ -512,7 +511,7 @@ func (c *channelCloser) proposeCloseSigned(fee btcutil.Amount) (*lnwire.ClosingS
 	// party responds we'll be able to decide if we've agreed on fees or
 	// not.
 	c.lastFeeProposal = fee
-	parsedSig, err := btcec.ParseSignature(rawSig, btcec.S256())
+	parsedSig, err := lnwire.NewSigFromRawSignature(rawSig)
 	if err != nil {
 		return nil, err
 	}
@@ -552,7 +551,7 @@ func (c *channelCloser) proposeCloseSigned(fee btcutil.Amount) (*lnwire.ClosingS
 // consider their fee acceptable if it's within 30% of our fee.
 func feeInAcceptableRange(localFee, remoteFee btcutil.Amount) bool {
 	// If our offer is lower than theirs, then we'll accept their
-	// offer it it's no more than 30% *greater* than our current
+	// offer if it's no more than 30% *greater* than our current
 	// offer.
 	if localFee < remoteFee {
 		acceptableRange := localFee + ((localFee * 3) / 10)

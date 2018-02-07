@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"io/ioutil"
-	"math/big"
 	"math/rand"
 	"os"
 	"reflect"
@@ -2023,7 +2022,7 @@ func TestUpdateFeeFail(t *testing.T) {
 
 }
 
-// TestUpdateFeeSenderCommits veriefies that the state machine progresses as
+// TestUpdateFeeSenderCommits verifies that the state machine progresses as
 // expected if we send a fee update, and then the sender of the fee update
 // sends a commitment signature.
 func TestUpdateFeeSenderCommits(t *testing.T) {
@@ -2103,7 +2102,7 @@ func TestUpdateFeeSenderCommits(t *testing.T) {
 	// that Bob's received everything up to the signature she sent,
 	// including the HTLC and fee update.
 	if _, err := aliceChannel.ReceiveRevocation(bobRevocation); err != nil {
-		t.Fatalf("alice unable to rocess bob's revocation: %v", err)
+		t.Fatalf("alice unable to process bob's revocation: %v", err)
 	}
 
 	// Alice receives new signature from Bob, and assumes this covers the
@@ -2198,7 +2197,7 @@ func TestUpdateFeeReceiverCommits(t *testing.T) {
 
 	// Bob receives the revocation of the old commitment
 	if _, err := bobChannel.ReceiveRevocation(aliceRevocation); err != nil {
-		t.Fatalf("alice unable to rocess bob's revocation: %v", err)
+		t.Fatalf("alice unable to process bob's revocation: %v", err)
 	}
 
 	// Alice will sign next commitment. Since she sent the revocation, she
@@ -2239,7 +2238,7 @@ func TestUpdateFeeReceiverCommits(t *testing.T) {
 		t.Fatalf("alice unable to sign commitment: %v", err)
 	}
 
-	// Alice receives revokation from Bob, and can now be sure that Bob
+	// Alice receives revocation from Bob, and can now be sure that Bob
 	// received the two updates, and they are considered locked in.
 	if _, err := aliceChannel.ReceiveRevocation(bobRevocation); err != nil {
 		t.Fatalf("bob unable to process alice's revocation: %v", err)
@@ -2383,7 +2382,7 @@ func TestUpdateFeeMultipleUpdates(t *testing.T) {
 	// Bob's received everything up to the signature she sent, including the
 	// HTLC and fee update.
 	if _, err := aliceChannel.ReceiveRevocation(bobRevocation); err != nil {
-		t.Fatalf("alice unable to rocess bob's revocation: %v", err)
+		t.Fatalf("alice unable to process bob's revocation: %v", err)
 	}
 
 	// Alice receives new signature from Bob, and assumes this covers the
@@ -2731,7 +2730,7 @@ func TestChanSyncOweCommitment(t *testing.T) {
 		// Each of the settle messages that Alice sent should match her
 		// original intent.
 		for i := 0; i < 3; i++ {
-			settleMsg, ok := aliceMsgsToSend[i].(*lnwire.UpdateFufillHTLC)
+			settleMsg, ok := aliceMsgsToSend[i].(*lnwire.UpdateFulfillHTLC)
 			if !ok {
 				t.Fatalf("expected a htlc settle message, "+
 					"instead have %v", spew.Sdump(settleMsg))
@@ -2768,20 +2767,20 @@ func TestChanSyncOweCommitment(t *testing.T) {
 			t.Fatalf("expected a CommitSig message, instead have %v",
 				spew.Sdump(aliceMsgsToSend[4]))
 		}
-		if !commitSigMsg.CommitSig.IsEqual(aliceSig) {
+		if commitSigMsg.CommitSig != aliceSig {
 			t.Fatalf("commit sig msgs don't match: expected %x got %x",
-				aliceSig.Serialize(), commitSigMsg.CommitSig.Serialize())
+				aliceSig, commitSigMsg.CommitSig)
 		}
 		if len(commitSigMsg.HtlcSigs) != len(aliceHtlcSigs) {
 			t.Fatalf("wrong number of htlc sigs: expected %v, got %v",
 				len(aliceHtlcSigs), len(commitSigMsg.HtlcSigs))
 		}
 		for i, htlcSig := range commitSigMsg.HtlcSigs {
-			if !htlcSig.IsEqual(aliceHtlcSigs[i]) {
+			if htlcSig != aliceHtlcSigs[i] {
 				t.Fatalf("htlc sig msgs don't match: "+
 					"expected %x got %x",
-					aliceHtlcSigs[i].Serialize(),
-					htlcSig.Serialize())
+					aliceHtlcSigs[i],
+					htlcSig)
 			}
 		}
 	}
@@ -3228,20 +3227,19 @@ func TestChanSyncOweRevocationAndCommit(t *testing.T) {
 			t.Fatalf("expected bob to re-send commit sig, instead sending: %v",
 				spew.Sdump(bobMsgsToSend[1]))
 		}
-		if !bobReCommitSigMsg.CommitSig.IsEqual(bobSig) {
+		if bobReCommitSigMsg.CommitSig != bobSig {
 			t.Fatalf("commit sig msgs don't match: expected %x got %x",
-				bobSig.Serialize(), bobReCommitSigMsg.CommitSig.Serialize())
+				bobSig, bobReCommitSigMsg.CommitSig)
 		}
 		if len(bobReCommitSigMsg.HtlcSigs) != len(bobHtlcSigs) {
 			t.Fatalf("wrong number of htlc sigs: expected %v, got %v",
 				len(bobHtlcSigs), len(bobReCommitSigMsg.HtlcSigs))
 		}
 		for i, htlcSig := range bobReCommitSigMsg.HtlcSigs {
-			if !htlcSig.IsEqual(aliceHtlcSigs[i]) {
+			if htlcSig != aliceHtlcSigs[i] {
 				t.Fatalf("htlc sig msgs don't match: "+
 					"expected %x got %x",
-					bobHtlcSigs[i].Serialize(),
-					htlcSig.Serialize())
+					bobHtlcSigs[i], htlcSig)
 			}
 		}
 	}
@@ -3426,21 +3424,20 @@ func TestChanSyncOweRevocationAndCommitForceTransition(t *testing.T) {
 		t.Fatalf("revocation msgs don't match: expected %v, got %v",
 			bobRevocation, bobReRevoke)
 	}
-	if !bobReCommitSigMsg.CommitSig.IsEqual(bobSigMsg.CommitSig) {
+	if bobReCommitSigMsg.CommitSig != bobSigMsg.CommitSig {
 		t.Fatalf("commit sig msgs don't match: expected %x got %x",
-			bobSigMsg.CommitSig.Serialize(),
-			bobReCommitSigMsg.CommitSig.Serialize())
+			bobSigMsg.CommitSig,
+			bobReCommitSigMsg.CommitSig)
 	}
 	if len(bobReCommitSigMsg.HtlcSigs) != len(bobSigMsg.HtlcSigs) {
 		t.Fatalf("wrong number of htlc sigs: expected %v, got %v",
 			len(bobSigMsg.HtlcSigs), len(bobReCommitSigMsg.HtlcSigs))
 	}
 	for i, htlcSig := range bobReCommitSigMsg.HtlcSigs {
-		if htlcSig.IsEqual(bobSigMsg.HtlcSigs[i]) {
+		if htlcSig != bobSigMsg.HtlcSigs[i] {
 			t.Fatalf("htlc sig msgs don't match: "+
 				"expected %x got %x",
-				bobSigMsg.HtlcSigs[i].Serialize(),
-				htlcSig.Serialize())
+				bobSigMsg.HtlcSigs[i], htlcSig)
 		}
 	}
 
@@ -3489,7 +3486,7 @@ func TestFeeUpdateRejectInsaneFee(t *testing.T) {
 	// Both Alice and Bob should reject this new fee rate as it it far too
 	// large.
 	if err := aliceChannel.UpdateFee(newFeeRate); err == nil {
-		t.Fatalf("alice should've rejected fee update")
+		t.Fatalf("alice should have rejected fee update")
 	}
 }
 
@@ -3598,20 +3595,19 @@ func TestChannelRetransmissionFeeUpdate(t *testing.T) {
 		t.Fatalf("expected a CommitSig message, instead have %v",
 			spew.Sdump(aliceMsgsToSend[1]))
 	}
-	if !commitSigMsg.CommitSig.IsEqual(aliceSig) {
+	if commitSigMsg.CommitSig != aliceSig {
 		t.Fatalf("commit sig msgs don't match: expected %x got %x",
-			aliceSig.Serialize(), commitSigMsg.CommitSig.Serialize())
+			aliceSig, commitSigMsg.CommitSig)
 	}
 	if len(commitSigMsg.HtlcSigs) != len(aliceHtlcSigs) {
 		t.Fatalf("wrong number of htlc sigs: expected %v, got %v",
 			len(aliceHtlcSigs), len(commitSigMsg.HtlcSigs))
 	}
 	for i, htlcSig := range commitSigMsg.HtlcSigs {
-		if !htlcSig.IsEqual(aliceHtlcSigs[i]) {
+		if htlcSig != aliceHtlcSigs[i] {
 			t.Fatalf("htlc sig msgs don't match: "+
 				"expected %x got %x",
-				aliceHtlcSigs[i].Serialize(),
-				htlcSig.Serialize())
+				aliceHtlcSigs[i], htlcSig)
 		}
 	}
 
@@ -3914,6 +3910,13 @@ func TestChanAvailableBandwidth(t *testing.T) {
 		t.Fatalf("unable to recv htlc cancel: %v", err)
 	}
 
+	// We must do a state transition before the balance is available
+	// for Alice.
+	if err := forceStateTransition(aliceChannel, bobChannel); err != nil {
+		t.Fatalf("unable to complete alice's state "+
+			"transition: %v", err)
+	}
+
 	// With the HTLC's settled in the log, we'll now assert that if we
 	// initiate a state transition, then our guess was correct.
 	assertBandwidthEstimateCorrect(false)
@@ -4120,7 +4123,7 @@ func TestInvalidCommitSigError(t *testing.T) {
 
 	// Before the signature gets to Bob, we'll mutate it, such that the
 	// signature is now actually invalid.
-	aliceSig.R.Add(aliceSig.R, new(big.Int).SetInt64(1))
+	aliceSig[0] ^= 88
 
 	// Bob should reject this new state, and return the proper error.
 	err = bobChannel.ReceiveNewCommitment(aliceSig, aliceHtlcSigs)
@@ -4290,6 +4293,69 @@ func TestChannelUnilateralCloseHtlcResolution(t *testing.T) {
 	}
 	if err := vm.Execute(); err != nil {
 		t.Fatalf("htlc timeout spend is invalid: %v", err)
+	}
+}
+
+// TestDesyncHTLCs checks that we cannot add HTLCs that would make the
+// balance negative, when the remote and local update logs are desynced.
+func TestDesyncHTLCs(t *testing.T) {
+	t.Parallel()
+
+	// We'll kick off the test by creating our channels which both are
+	// loaded with 5 BTC each.
+	aliceChannel, bobChannel, cleanUp, err := createTestChannels(1)
+	if err != nil {
+		t.Fatalf("unable to create test channels: %v", err)
+	}
+	defer cleanUp()
+
+	// First add one HTLC of value 4.1 BTC.
+	htlcAmt := lnwire.NewMSatFromSatoshis(4.1 * btcutil.SatoshiPerBitcoin)
+	htlc, _ := createHTLC(0, htlcAmt)
+	aliceIndex, err := aliceChannel.AddHTLC(htlc)
+	if err != nil {
+		t.Fatalf("unable to add htlc: %v", err)
+	}
+	bobIndex, err := bobChannel.ReceiveHTLC(htlc)
+	if err != nil {
+		t.Fatalf("unable to recv htlc: %v", err)
+	}
+
+	// Lock this HTLC in.
+	if err := forceStateTransition(aliceChannel, bobChannel); err != nil {
+		t.Fatalf("unable to complete state update: %v", err)
+	}
+
+	// Now let let Bob fail this HTLC.
+	if err := bobChannel.FailHTLC(bobIndex, []byte("failreason")); err != nil {
+		t.Fatalf("unable to cancel HTLC: %v", err)
+	}
+	if err := aliceChannel.ReceiveFailHTLC(aliceIndex, []byte("bad")); err != nil {
+		t.Fatalf("unable to recv htlc cancel: %v", err)
+	}
+
+	// Alice now has gotten all here original balance (5 BTC) back,
+	// however, adding a new HTLC at this point SHOULD fail, since
+	// if she add the HTLC and sign the next state, Bob cannot assume
+	// she received the FailHTLC, and must assume she doesn't have
+	// the necessary balance available.
+	//
+	// We try adding an HTLC of value 1 BTC, which should fail
+	// because the balance is unavailable.
+	htlcAmt = lnwire.NewMSatFromSatoshis(1 * btcutil.SatoshiPerBitcoin)
+	htlc, _ = createHTLC(1, htlcAmt)
+	if _, err = aliceChannel.AddHTLC(htlc); err != ErrInsufficientBalance {
+		t.Fatalf("expected ErrInsufficientBalance, instead received: %v",
+			err)
+	}
+
+	// Now do a state transition, which will ACK the FailHTLC, making
+	// Alice able to add the new HTLC.
+	if err := forceStateTransition(aliceChannel, bobChannel); err != nil {
+		t.Fatalf("unable to complete state update: %v", err)
+	}
+	if _, err = aliceChannel.AddHTLC(htlc); err != nil {
+		t.Fatalf("unable to add htlc: %v", err)
 	}
 }
 

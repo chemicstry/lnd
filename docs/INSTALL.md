@@ -94,7 +94,7 @@ go install . ./cmd/...
 Running the following command will create `rpc.cert` and default `btcd.conf`.
 
 ```
-btcd --testnet --txindex --rpcuser=kek --rpcpass=kek
+btcd --testnet --txindex --rpcuser=REPLACEME --rpcpass=REPLACEME
 ```
 If you want to use `lnd` on testnet, `btcd` needs to first fully sync the
 testnet blockchain. Depending on your hardware, this may take up to a few
@@ -105,7 +105,7 @@ hours.
 While `btcd` is syncing you can check on its progress using btcd's `getinfo`
 RPC command:
 ```
-btcctl --testnet --rpcuser=kek --rpcpass=kek getinfo
+btcctl --testnet --rpcuser=REPLACEME --rpcpass=REPLACEME getinfo
 {
   "version": 120000,
   "protocolversion": 70002,
@@ -125,7 +125,7 @@ time.
 
 You can test your `btcd` node's connectivity using the `getpeerinfo` command:
 ```
-btcctl --testnet --rpcuser=kek --rpcpass=kek getpeerinfo | more
+btcctl --testnet --rpcuser=REPLACEME --rpcpass=REPLACEME getpeerinfo | more
 ```
 
 ### lnd
@@ -147,11 +147,11 @@ To send this "special" HTLC type, include the `--debugsend` command at the end
 of your `sendpayment` commands.
 
 
-There are currently two primary ways to run `lnd`, one requires a local `btcd`
-instance with the RPC service exposed, and the other uses a fully integrate
+There are currently two primary ways to run `lnd`: one requires a local `btcd`
+instance with the RPC service exposed, and the other uses a fully integrated
 light client powered by [neutrino](https://github.com/lightninglabs/neutrino).
 
-#### Running lnd in light client mode
+#### Running lnd in Light Client Mode
 
 In order to run `lnd` in its light client mode, you'll need to locate a
 full-node which is capable of serving this new light client mode. A [BIP
@@ -161,8 +161,7 @@ running `roasbeef`'s fork of btcd. A public instance of such a node can be
 found at `faucet.lightning.community`.
 
 To run lnd in neutrino mode, run `lnd` with the following arguments, (swapping
-in `--bitcoin.simnet` for `simnet` mode if needed), and also your own `btcd`
-node if available:
+in `--bitcoin.simnet` if needed), and also your own `btcd` node if available:
 ```
 lnd --bitcoin.active --bitcoin.testnet --debuglevel=debug --bitcoin.node=neutrino --neutrino.connect=faucet.lightning.community
 ```
@@ -179,18 +178,59 @@ lnd --bitcoin.active --bitcoin.testnet --debuglevel=debug --btcd.rpcuser=kek --b
 
 #### Running lnd using the bitcoind backend
 
-In order to run `lnd` with a `bitcoind` back-end, the `bitcoind` instance must
-be configured with `--txindex` just like `btcd` above. In addition, you'll need
- to configure the `bitcoind` instance with `--zmqpubrawblock` and `--zmqpubrawtx`
+To configure your bitcoind backend for use with lnd, first complete and verify the following:
+
+- The `bitcoind` instance must
+be configured with `--txindex` just like `btcd` above
+- Additionally, since `lnd` uses [ZeroMQ](https://github.com/bitcoin/bitcoin/blob/master/doc/zmq.md) to interface with `bitcoind`, *your `bitcoind` installation must be compiled with ZMQ*. If you installed it from source, this is likely the case, but if you installed it via Homebrew in the past it may not be included ([this has now been fixed](https://github.com/Homebrew/homebrew-core/pull/23088) in the latest Homebrew recipe for bitcoin)
+- Configure the `bitcoind` instance for ZMQ with `--zmqpubrawblock` and `--zmqpubrawtx`
 (the latter is optional but allows you to see unconfirmed transactions in your
-wallet). They must be combined in the same ZMQ socket address. Then, run this
-command after `bitcoind` has finished syncing on testnet. Otherwise, replace
-`--bitcoin.testnet` with `--bitcoin.regtest`. Please note that the `rpcuser`
-and `rpcpass` parameters can typically be determined by `lnd` for a `bitcoind`
-instance running under the same user, including when using cookie auth.
+wallet). They must be combined in the same ZMQ socket address (e.g. `--zmqpubrawblock=tcp://127.0.0.1:28332` and `--zmqpubrawtx=tcp://127.0.0.1:28332`).
+- Start `bitcoind` running against testnet, and let it complete a full sync with the testnet chain (alternatively, use `--bitcoind.regtest` instead).
+
+Here's a sample `bitcoin.conf` for use with lnd:
 ```
-lnd --bitcoin.active --bitcoin.testnet --debuglevel=debug --bitcoin.node=bitcoind --bitcoind.rpcuser=kek --bitcoind.rpcpass=kek --externalip=X.X.X.X
+testnet=1
+txindex=1
+server=1
+daemon=1
+zmqpubrawblock=tcp://127.0.0.1:18501
+zmqpubrawtx=tcp://127.0.0.1:18501
 ```
+
+Once all of the above is complete, and you've confirmed `bitcoind` is fully updated with the latest blocks on testnet, run the command below to launch `lnd` with `bitcoind` as your backend (as with `bitcoind`, you can create an `lnd.conf` to save these options, more info on that is described further below):
+
+```
+lnd --bitcoin.active --bitcoin.testnet --debuglevel=debug --bitcoin.node=bitcoind --bitcoind.rpcuser=REPLACEME --bitcoind.rpcpass=REPLACEME --bitcoind.zmqpath=tcp://127.0.0.1:28332 --externalip=X.X.X.X
+```
+
+*NOTE:* 
+- The auth parameters `rpcuser` and `rpcpass` parameters can typically be determined by `lnd` for a `bitcoind` instance running under the same user, including when using cookie auth. In this case, you can exclude them from the `lnd` options entirely.
+- If you DO choose to explicitly pass the auth parameters in your `lnd.conf` or command line options for `lnd` (`bitcoind.rpcuser` and `bitcoind.rpcpass` as shown in example command above), you must also specify the `bitcoind.zmqpath` option. Otherwise, `lnd` will attempt to get the configuration from your `bitcoin.conf`.
+- You must ensure the same address (including port) is used for the `bitcoind.zmqpath` option passed to `lnd` as for the `zmqpubrawblock` and `zmqpubrawtx` passed in the `bitcoind` options.
+
+#### Disabling Wallet Encryption
+
+To disable encryption of the wallet files, pass the `--noencryptwallet` argument
+to `lnd`. Obviously beware the security implications of running an unencrypted
+wallet - this argument must only be used for testing purposes.
+
+#### Macaroons
+
+`lnd`'s authentication system is called **macaroons**, which are decentralized
+bearer credentials allowing for delegation, attenuation, and other cool
+features. You can learn more about them in Alex Akselrod's [writeup on
+Github](https://github.com/lightningnetwork/lnd/issues/20).
+
+Running `lnd` for the first time will by default generate the `admin.macaroon`,
+`read_only.macaroon`, and `macaroons.db` files that are used to authenticate
+into `lnd`. They will be stored in the default `lnd` data directory. Note that
+if you specified an alternative data directory (via the `--datadir` argument),
+you will have to additionally pass the updated location of the `admin.macaroon`
+file into `lncli` using the `--macaroonpath` argument.
+
+To disable macaroons for testing, pass the `--no-macaroons` flag into *both*
+`lnd` and `lncli`.
 
 #### Network Reachability 
 

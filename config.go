@@ -20,6 +20,7 @@ import (
 	flags "github.com/jessevdk/go-flags"
 	"github.com/lightningnetwork/lnd/brontide"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/lightningnetwork/lnd/torsvc"
 	"github.com/roasbeef/btcd/btcec"
 	"github.com/roasbeef/btcutil"
 )
@@ -27,6 +28,8 @@ import (
 const (
 	defaultConfigFilename     = "lnd.conf"
 	defaultDataDirname        = "data"
+	defaultChainSubDirname    = "chain"
+	defaultGraphSubDirname    = "graph"
 	defaultTLSCertFilename    = "tls.cert"
 	defaultTLSKeyFilename     = "tls.key"
 	defaultAdminMacFilename   = "admin.macaroon"
@@ -130,6 +133,11 @@ type autoPilotConfig struct {
 	Allocation  float64 `long:"allocation" description:"The percentage of total funds that should be committed to automatic channel establishment"`
 }
 
+type torConfig struct {
+	Socks string `long:"socks" description:"The port that Tor's exposed SOCKS5 proxy is listening on. Using Tor allows outbound-only connections (listening will be disabled) -- NOTE port must be between 1024 and 65535"`
+	DNS   string `long:"dns" description:"The DNS server as IP:PORT that Tor will use for SRV queries - NOTE must have TCP resolution enabled"`
+}
+
 // config defines the configuration options for lnd.
 //
 // See loadConfig for further details regarding the configuration
@@ -156,7 +164,7 @@ type config struct {
 
 	CPUProfile string `long:"cpuprofile" description:"Write CPU profile to the specified file"`
 
-	Profile string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
+	Profile string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65535"`
 
 	DebugHTLC          bool `long:"debughtlc" description:"Activate the debug htlc mode. With the debug HTLC mode, all payments sent use a pre-determined R-Hash. Additionally, all HTLCs sent to a node with the debug HTLC R-Hash are immediately settled in the next available state transition."`
 	HodlHTLC           bool `long:"hodlhtlc" description:"Activate the hodl HTLC mode.  With hodl HTLC mode, all incoming HTLCs will be accepted by the receiving node, but no attempt will be made to settle the payment with the sender."`
@@ -172,6 +180,8 @@ type config struct {
 
 	Autopilot *autoPilotConfig `group:"autopilot" namespace:"autopilot"`
 
+	Tor *torConfig `group:"Tor" namespace:"tor"`
+
 	NoNetBootstrap bool `long:"nobootstrap" description:"If true, then automatic network bootstrapping will not be attempted."`
 
 	NoEncryptWallet bool `long:"noencryptwallet" description:"If set, wallet will be encrypted using the default passphrase."`
@@ -180,6 +190,8 @@ type config struct {
 
 	Alias string `long:"alias" description:"The node alias. Used as a moniker by peers and intelligence services"`
 	Color string `long:"color" description:"The color of the node in hex format (i.e. '#3399FF'). Used to customize node appearance in intelligence services"`
+
+	net torsvc.Net
 }
 
 // loadConfig initializes and parses the config using a config file and command
@@ -284,6 +296,51 @@ func loadConfig() (*config, error) {
 		return nil, err
 	}
 
+	// Setup dial and DNS resolution functions depending on the specified
+	// options. The default is to use the standard golang "net" package
+	// functions. When Tor's proxy is specified, the dial function is set to
+	// the proxy specific dial function and the DNS resolution functions use
+	// Tor.
+	cfg.net = &torsvc.RegularNet{}
+	if cfg.Tor.Socks != "" && cfg.Tor.DNS != "" {
+		// Validate Tor port number
+		torport, err := strconv.Atoi(cfg.Tor.Socks)
+		if err != nil || torport < 1024 || torport > 65535 {
+			str := "%s: The tor socks5 port must be between 1024 and 65535"
+			err := fmt.Errorf(str, funcName)
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, usageMessage)
+			return nil, err
+		}
+
+		// If ExternalIPs is set, throw an error since we cannot
+		// listen for incoming connections via Tor's SOCKS5 proxy.
+		if len(cfg.ExternalIPs) != 0 {
+			str := "%s: Cannot set externalip flag with proxy flag - " +
+				"cannot listen for incoming connections via Tor's " +
+				"socks5 proxy"
+			err := fmt.Errorf(str, funcName)
+			return nil, err
+		}
+
+		cfg.net = &torsvc.TorProxyNet{
+			TorDNS:   cfg.Tor.DNS,
+			TorSocks: cfg.Tor.Socks,
+		}
+
+		// If we are using Tor, since we only want connections routed
+		// through Tor, listening is disabled.
+		cfg.DisableListen = true
+
+	} else if cfg.Tor.Socks != "" || cfg.Tor.DNS != "" {
+		// Both TorSocks and TorDNS must be set.
+		str := "%s: Both the tor.socks and the tor.dns flags must be set" +
+			"to properly route connections and avoid DNS leaks while" +
+			"using Tor"
+		err := fmt.Errorf(str, funcName)
+		return nil, err
+	}
+
 	switch {
 	// At this moment, multiple active chains are not supported.
 	case cfg.Litecoin.Active && cfg.Bitcoin.Active:
@@ -328,7 +385,10 @@ func loadConfig() (*config, error) {
 				"ltcd: %v", err)
 			return nil, err
 		}
-		cfg.Litecoin.ChainDir = filepath.Join(cfg.DataDir, litecoinChain.String())
+
+		cfg.Litecoin.ChainDir = filepath.Join(cfg.DataDir,
+			defaultChainSubDirname,
+			litecoinChain.String())
 
 		// Finally we'll register the litecoin chain as our current
 		// primary chain.
@@ -392,7 +452,9 @@ func loadConfig() (*config, error) {
 			// No need to get RPC parameters.
 		}
 
-		cfg.Bitcoin.ChainDir = filepath.Join(cfg.DataDir, bitcoinChain.String())
+		cfg.Bitcoin.ChainDir = filepath.Join(cfg.DataDir,
+			defaultChainSubDirname,
+			bitcoinChain.String())
 
 		// Finally we'll register the bitcoin chain as our current
 		// primary chain.
@@ -435,16 +497,13 @@ func loadConfig() (*config, error) {
 	// TODO(roasbeef): when we go full multi-chain remove the additional
 	// namespacing on the target chain.
 	cfg.DataDir = cleanAndExpandPath(cfg.DataDir)
-	cfg.DataDir = filepath.Join(cfg.DataDir, activeNetParams.Name)
-	cfg.DataDir = filepath.Join(cfg.DataDir,
-		registeredChains.primaryChain.String())
 
 	// Append the network type to the log directory so it is "namespaced"
 	// per network in the same fashion as the data directory.
 	cfg.LogDir = cleanAndExpandPath(cfg.LogDir)
-	cfg.LogDir = filepath.Join(cfg.LogDir, activeNetParams.Name)
 	cfg.LogDir = filepath.Join(cfg.LogDir,
-		registeredChains.primaryChain.String())
+		registeredChains.PrimaryChain().String(),
+		normalizeNetwork(activeNetParams.Name))
 
 	// Ensure that the paths to the TLS key and certificate files are
 	// expanded and cleaned.
@@ -468,7 +527,8 @@ func loadConfig() (*config, error) {
 		cfg.RPCListeners = append(cfg.RPCListeners, addr)
 	}
 
-	// Listen on the default interface/port if no REST listeners were specified.
+	// Listen on the default interface/port if no REST listeners were
+	// specified.
 	if len(cfg.RESTListeners) == 0 {
 		addr := fmt.Sprintf("localhost:%d", defaultRESTPort)
 		cfg.RESTListeners = append(cfg.RESTListeners, addr)
@@ -478,6 +538,18 @@ func loadConfig() (*config, error) {
 	if len(cfg.Listeners) == 0 {
 		addr := fmt.Sprintf(":%d", defaultPeerPort)
 		cfg.Listeners = append(cfg.Listeners, addr)
+	}
+
+	// For each of the RPC listeners (REST+gRPC), we'll ensure that users
+	// have specified a safe combo for authentication. If not, we'll bail
+	// out with an error.
+	err := enforceSafeAuthentication(cfg.RPCListeners, !cfg.NoMacaroons)
+	if err != nil {
+		return nil, err
+	}
+	err = enforceSafeAuthentication(cfg.RESTListeners, !cfg.NoMacaroons)
+	if err != nil {
+		return nil, err
 	}
 
 	// Remove all Listeners if listening is disabled.
@@ -560,7 +632,7 @@ func parseAndSetDebugLevels(debugLevel string) error {
 		// Validate subsystem.
 		if _, exists := subsystemLoggers[subsysID]; !exists {
 			str := "The specified subsystem [%v] is invalid -- " +
-				"supported subsytems %v"
+				"supported subsystems %v"
 			return fmt.Errorf(str, subsysID, supportedSubsystems())
 		}
 
@@ -614,7 +686,7 @@ func supportedSubsystems() []string {
 func noiseDial(idPriv *btcec.PrivateKey) func(net.Addr) (net.Conn, error) {
 	return func(a net.Addr) (net.Conn, error) {
 		lnAddr := a.(*lnwire.NetAddress)
-		return brontide.Dial(idPriv, lnAddr)
+		return brontide.Dial(idPriv, lnAddr, cfg.net.Dial)
 	}
 }
 
@@ -870,4 +942,50 @@ func normalizeAddresses(addrs []string, defaultPort string) []string {
 		}
 	}
 	return result
+}
+
+// enforceSafeAuthentication enforces "safe" authentication taking into account
+// the interfaces that the RPC servers are listening on, and if macaroons are
+// activated or not. To project users from using dangerous config combinations,
+// we'll prevent disabling authentication if the sever is listening on a public
+// interface.
+func enforceSafeAuthentication(addrs []string, macaroonsActive bool) error {
+	isLoopback := func(addr string) bool {
+		loopBackAddrs := []string{"localhost", "127.0.0.1"}
+		for _, loopback := range loopBackAddrs {
+			if strings.Contains(addr, loopback) {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	// We'll now examine all addresses that this RPC server is listening
+	// on. If it's a localhost address, we'll skip it, otherwise, we'll
+	// return an error if macaroons are inactive.
+	for _, addr := range addrs {
+		if isLoopback(addr) {
+			continue
+		}
+
+		if !macaroonsActive {
+			return fmt.Errorf("Detected RPC server listening on "+
+				"publicly reachable interface %v with "+
+				"authentication disabled! Refusing to start with "+
+				"--no-macaroons specified.", addr)
+		}
+	}
+
+	return nil
+}
+
+// normalizeNetwork returns the common name of a network type used to create
+// file paths. This allows differently versioned networks to use the same path.
+func normalizeNetwork(network string) string {
+	if strings.HasPrefix(network, "testnet") {
+		return "testnet"
+	}
+
+	return network
 }
