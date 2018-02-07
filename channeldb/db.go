@@ -40,6 +40,10 @@ var (
 			number:    0,
 			migration: nil,
 		},
+		{
+			number:    1,
+			migration: AddressMigration,
+		},
 	}
 
 	// Big endian is the preferred byte order, due to cursor scans over
